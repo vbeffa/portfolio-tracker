@@ -5,23 +5,16 @@ import argparse
 
 import pandas as pd
 from openpyxl import load_workbook
+from io import StringIO
 
 
 COLUMN_MAP = {
-    "bid": [
-        "Bid",
-    ],
-    "ask": [
-        "Ask",
-    ],
-    "quantity": [
-        "Quantity",
-        "Qty",
-    ],
-    "market_value": [
-        "Market Value",
-        "Current Value",
-    ],
+    "last_price": ["Last price"],
+    "bid": ["Bid"],
+    "ask": ["Ask"],
+    "quantity": ["Quantity", "Qty"],
+    "market_value": ["Current value"],
+    "symbol": ["Symbol"],
 }
 
 
@@ -95,14 +88,34 @@ def main() -> int:
     # Read CSV
     #
 
-    df = pd.read_csv(input_path)
+    with open(input_path, encoding="utf-8-sig") as f:
+        lines = f.readlines()
+
+    # Fidelity's disclaimer marks the beginning of the footer.
+    for i, line in enumerate(lines):
+        if line.startswith('"The data and information'):
+            lines = lines[:i]
+            break
+
+    # Fix Fidelity's missing trailing comma in the header.
+    header = lines[0].rstrip("\n")
+    if header.count(",") < lines[1].count(","):
+        lines[0] = header + ",\n"
+
+    df = pd.read_csv(StringIO("".join(lines)))
+
+    # Remove the dummy column created by Fidelity's malformed header.
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed:")].copy()
 
     lookup = build_lookup(df.columns)
 
+    last_price_col = get_column(lookup, "last_price")
+    print(f"Last price column: {last_price_col}")
     bid_col = get_column(lookup, "bid")
     ask_col = get_column(lookup, "ask")
     qty_col = get_column(lookup, "quantity")
     market_value_col = get_column(lookup, "market_value")
+    # symbol_col = get_column(lookup, "symbol")
 
     if bid_col is None:
         print("Error: Could not locate Bid column.")
@@ -112,8 +125,15 @@ def main() -> int:
         print("Error: Could not locate Ask column.")
         return 1
 
-    bid = pd.to_numeric(df[bid_col], errors="coerce")
-    ask = pd.to_numeric(df[ask_col], errors="coerce")
+    last = pd.to_numeric(
+        df[last_price_col]
+        .astype(str)
+        .str.replace("$", "", regex=False)
+        .str.replace(",", "", regex=False),
+        errors="coerce",
+    )
+    bid = pd.to_numeric(df[bid_col].replace("--", pd.NA), errors="coerce")
+    ask = pd.to_numeric(df[ask_col].replace("--", pd.NA), errors="coerce")
 
     if qty_col:
         quantity = pd.to_numeric(df[qty_col], errors="coerce").fillna(1)
@@ -124,8 +144,29 @@ def main() -> int:
     # Calculations
     #
 
-    df["Mid"] = (bid + ask) / 2
-    df["Mid Value"] = df["Mid"] * quantity * 100
+    mid = (bid + ask) / 2
+
+    # If bid/ask are unavailable, fall back to the last traded price.
+    mid = mid.fillna(last)
+
+    df["Mid"] = mid
+    df["Mid Value"] = mid * quantity * 100
+
+    cash_mask = (
+        df["Symbol"].fillna("").str.contains(
+            "SPAXX|Pending Activity",
+            case=False,
+            regex=True,
+        )
+    )
+
+    df.loc[cash_mask, "Mid Value"] = pd.to_numeric(
+        df.loc[cash_mask, market_value_col]
+        .astype(str)
+        .str.replace("$", "", regex=False)
+        .str.replace(",", "", regex=False),
+        errors="coerce",
+    )
 
     midpoint_total = df["Mid Value"].sum(skipna=True)
 
@@ -186,7 +227,7 @@ def main() -> int:
     print()
     print("Portfolio Summary")
     print("-----------------")
-    print(f"Positions:                {len(df):>8}")
+    print(f"Positions:                {len(df):>15}")
 
     if fidelity_total is not None:
         print(f"Fidelity Market Value:    ${fidelity_total:>15,.2f}")
