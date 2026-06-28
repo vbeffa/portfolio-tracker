@@ -43,12 +43,13 @@ def parse_args():
     return parser.parse_args()
 
 
-def format_currency(ws, headers, column_name):
-    if column_name and column_name in headers:
-        col = headers[column_name]
-        for row in range(2, ws.max_row + 1):
-            ws.cell(row, col).number_format = "$#,##0.00"
-
+def parse_money(series):
+    return pd.to_numeric(
+        series.astype(str)
+              .str.replace("$", "", regex=False)
+              .str.replace(",", "", regex=False),
+        errors="coerce",
+    )
 
 def main() -> int:
     args = parse_args()
@@ -91,21 +92,24 @@ def main() -> int:
     market_value_col = get_column(lookup, "market_value")
     symbol_col = get_column(lookup, "symbol")
 
-    if bid_col is None:
-        print("Error: Could not locate Bid column.")
+    required = {
+        "Last Price": last_price_col,
+        "Bid": bid_col,
+        "Ask": ask_col,
+        "Quantity": qty_col,
+        "Current Value": market_value_col,
+        "Symbol": symbol_col,
+    }
+
+    missing = [name for name, col in required.items() if col is None]
+
+    if missing:
+        print("Missing required columns:")
+        for name in missing:
+            print(f"  - {name}")
         return 1
 
-    if ask_col is None:
-        print("Error: Could not locate Ask column.")
-        return 1
-
-    last = pd.to_numeric(
-        df[last_price_col]
-        .astype(str)
-        .str.replace("$", "", regex=False)
-        .str.replace(",", "", regex=False),
-        errors="coerce",
-    )
+    last = parse_money(df[last_price_col])
     bid = pd.to_numeric(df[bid_col].replace("--", pd.NA), errors="coerce")
     ask = pd.to_numeric(df[ask_col].replace("--", pd.NA), errors="coerce")
 
@@ -126,32 +130,28 @@ def main() -> int:
     df["Mid"] = mid
     df["Mid Value"] = mid * quantity * 100
 
-    current_value = pd.to_numeric(
-        df[market_value_col]
-        .astype(str)
-        .str.replace("$", "", regex=False)
-        .str.replace(",", "", regex=False),
-        errors="coerce",
-    ).fillna(0)
+    current_value = parse_money(df[market_value_col]).fillna(0)
 
-    spaxx_mask = (
-        df[symbol_col]
-        .fillna("")
-        .astype(str)
-        .str.startswith("SPAXX")
-    )
+    df["Asset Type"] = "Option"
 
-    pending_mask = (
-        df[symbol_col]
-        .fillna("")
-        .astype(str)
-        .str.contains("Pending Activity", case=False, regex=False)
-    )
+    df.loc[
+        df[symbol_col].str.startswith("SPAXX", na=False),
+        "Asset Type",
+    ] = "Cash"
+
+    df.loc[
+        df[symbol_col].str.contains(
+            "Pending Activity",
+            case=False,
+            na=False,
+        ),
+        "Asset Type",
+    ] = "Pending"
 
 
     midpoint_total = df["Mid Value"].sum(skipna=True)
-    spaxx_total = current_value.loc[spaxx_mask].sum()
-    pending_total = current_value.loc[pending_mask].sum()
+    spaxx_total = current_value[df["Asset Type"] == "Cash"].sum()
+    pending_total = current_value[df["Asset Type"] == "Pending"].sum()
 
     total_portfolio = midpoint_total + spaxx_total + pending_total
 
@@ -160,14 +160,7 @@ def main() -> int:
 
     if market_value_col:
         fidelity_total = (
-            pd.to_numeric(
-                df[market_value_col]
-                .astype(str)
-                .str.replace("$", "", regex=False)
-                .str.replace(",", "", regex=False),
-                errors="coerce",
-            )
-            .fillna(0)
+            current_value
             .sum()
         )
 
