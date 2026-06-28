@@ -4,7 +4,6 @@ from pathlib import Path
 import argparse
 
 import pandas as pd
-from openpyxl import load_workbook
 from io import StringIO
 
 
@@ -41,13 +40,6 @@ def parse_args():
         help="Input Fidelity CSV file",
     )
 
-    parser.add_argument(
-        "output_xlsx",
-        nargs="?",
-        type=Path,
-        help="Output Excel workbook (default: input filename with .xlsx extension)",
-    )
-
     return parser.parse_args()
 
 
@@ -66,23 +58,6 @@ def main() -> int:
     if not input_path.exists():
         print(f"Error: '{input_path}' does not exist.")
         return 1
-
-    output_path = (
-        args.output_xlsx
-        if args.output_xlsx
-        else input_path.with_suffix(".xlsx")
-    )
-
-    if output_path.exists():
-        answer = input(
-            f"'{output_path}' already exists. Overwrite? [Y/n]: "
-        ).strip().lower()
-
-        if answer in ("n", "no"):
-            print("Aborted.")
-            return 1
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     #
     # Read CSV
@@ -110,12 +85,11 @@ def main() -> int:
     lookup = build_lookup(df.columns)
 
     last_price_col = get_column(lookup, "last_price")
-    print(f"Last price column: {last_price_col}")
     bid_col = get_column(lookup, "bid")
     ask_col = get_column(lookup, "ask")
     qty_col = get_column(lookup, "quantity")
     market_value_col = get_column(lookup, "market_value")
-    # symbol_col = get_column(lookup, "symbol")
+    symbol_col = get_column(lookup, "symbol")
 
     if bid_col is None:
         print("Error: Could not locate Bid column.")
@@ -152,27 +126,37 @@ def main() -> int:
     df["Mid"] = mid
     df["Mid Value"] = mid * quantity * 100
 
-    cash_mask = (
-        df["Symbol"].fillna("").str.contains(
-            "SPAXX|Pending Activity",
-            case=False,
-            regex=True,
-        )
-    )
-
-    df.loc[cash_mask, "Mid Value"] = pd.to_numeric(
-        df.loc[cash_mask, market_value_col]
+    current_value = pd.to_numeric(
+        df[market_value_col]
         .astype(str)
         .str.replace("$", "", regex=False)
         .str.replace(",", "", regex=False),
         errors="coerce",
+    ).fillna(0)
+
+    spaxx_mask = (
+        df[symbol_col]
+        .fillna("")
+        .astype(str)
+        .str.startswith("SPAXX")
     )
 
+    pending_mask = (
+        df[symbol_col]
+        .fillna("")
+        .astype(str)
+        .str.contains("Pending Activity", case=False, regex=False)
+    )
+
+
     midpoint_total = df["Mid Value"].sum(skipna=True)
+    spaxx_total = current_value.loc[spaxx_mask].sum()
+    pending_total = current_value.loc[pending_mask].sum()
+
+    total_portfolio = midpoint_total + spaxx_total + pending_total
 
     fidelity_total = None
     difference = None
-    percent_difference = None
 
     if market_value_col:
         fidelity_total = (
@@ -189,37 +173,6 @@ def main() -> int:
 
         difference = midpoint_total - fidelity_total
 
-        if fidelity_total != 0:
-            percent_difference = difference / fidelity_total * 100
-
-    spread_pct = ((ask - bid) / ((ask + bid) / 2) * 100).mean(skipna=True)
-
-    #
-    # Write workbook
-    #
-
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Open Positions")
-
-    wb = load_workbook(output_path)
-    ws = wb["Open Positions"]
-
-    headers = {
-        cell.value: index + 1
-        for index, cell in enumerate(ws[1])
-    }
-
-    for column in (
-        bid_col,
-        ask_col,
-        market_value_col,
-        "Mid",
-        "Mid Value",
-    ):
-        format_currency(ws, headers, column)
-
-    wb.save(output_path)
-
     #
     # Summary
     #
@@ -228,22 +181,22 @@ def main() -> int:
     print("Portfolio Summary")
     print("-----------------")
     print(f"Positions:                {len(df):>15}")
+    print()
+    print(f"Options (Midpoint):      ${midpoint_total:>15,.2f}")
+    print(f"SPAXX:                   ${spaxx_total:>15,.2f}")
+    print(f"Pending Activity:        ${pending_total:>15,.2f}")
+    print("                         ----------------")
+    print(f"Total Portfolio Value:   ${total_portfolio:>15,.2f}")
+
 
     if fidelity_total is not None:
-        print(f"Fidelity Market Value:    ${fidelity_total:>15,.2f}")
-
-    print(f"Midpoint Market Value:    ${midpoint_total:>15,.2f}")
-
-    if difference is not None:
+        difference = total_portfolio - fidelity_total
+        percent = difference / fidelity_total * 100 if fidelity_total else 0
         sign = "+" if difference >= 0 else ""
-        print(
-            f"Difference:               ${difference:>15,.2f} ({sign}{percent_difference:.2f}%)"
-        )
+        print()
+        print(f"Fidelity Market Value:   ${fidelity_total:>15,.2f}")
+        print(f"Difference:              ${difference:>15,.2f} ({sign}{percent:.2f}%)")
 
-    if pd.notna(spread_pct):
-        print(f"Average Bid/Ask Spread:   {spread_pct:>15.2f}%")
-
-    print(f"Output:                   {output_path}")
     print()
 
     return 0
