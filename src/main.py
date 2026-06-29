@@ -46,8 +46,9 @@ def parse_args():
 def parse_money(series):
     return pd.to_numeric(
         series.astype(str)
-              .str.replace("$", "", regex=False)
-              .str.replace(",", "", regex=False),
+            .replace("--", pd.NA)
+            .str.replace("$", "", regex=False)
+            .str.replace(",", "", regex=False),
         errors="coerce",
     )
 
@@ -110,8 +111,8 @@ def main() -> int:
         return 1
 
     last = parse_money(df[last_price_col])
-    bid = pd.to_numeric(df[bid_col].replace("--", pd.NA), errors="coerce")
-    ask = pd.to_numeric(df[ask_col].replace("--", pd.NA), errors="coerce")
+    bid = parse_money(df[bid_col])
+    ask = parse_money(df[ask_col])
 
     if qty_col:
         quantity = pd.to_numeric(df[qty_col], errors="coerce").fillna(1)
