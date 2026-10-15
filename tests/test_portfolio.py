@@ -37,8 +37,8 @@ class PortfolioTests(unittest.TestCase):
             return summarize(read_fidelity_csv(path))
 
     def test_missing_bid_ask_uses_last_and_no_double_count(self):
-        df, amounts, total, fidelity, mids, fallbacks = self.load()
-        self.assertEqual((mids, fallbacks), (0, 2))
+        df, amounts, total, fidelity, mids, fallbacks, missing = self.load()
+        self.assertEqual((mids, fallbacks, missing), (0, 2, 0))
         self.assertAlmostEqual(amounts["Options"], 200)
         self.assertAlmostEqual(amounts["SPAXX"], 200)
         self.assertAlmostEqual(amounts["Pending Activity"], -20)
@@ -47,9 +47,22 @@ class PortfolioTests(unittest.TestCase):
         self.assertAlmostEqual(fidelity, 530)
         self.assertEqual(df.loc[df["Asset Type"] == "Option", "Price Source"].tolist(), ["Last", "Last"])
 
+    def test_unpriced_long_option_remains_missing(self):
+        from io import StringIO
+        import pandas as pd
+
+        sample = pd.read_csv(StringIO(HEADER + "\n" + "\n".join(ROWS + [
+            "EXAMPLE, -ACME270115C150,ACME JAN 15 2027 $150 CALL,1,--,--"
+        ])))
+        df, amounts, total, fidelity, mids, fallbacks, missing = summarize(sample)
+        self.assertEqual((mids, fallbacks, missing), (0, 2, 1))
+        self.assertEqual(df.iloc[-1]["Price Source"], "Unavailable")
+        self.assertTrue(pd.isna(df.iloc[-1]["Calculated Value"]))
+        self.assertAlmostEqual(total, 530)
+
     def test_midpoints_override_last_only_for_options(self):
-        df, amounts, total, fidelity, mids, fallbacks = self.load(with_quotes=True)
-        self.assertEqual((mids, fallbacks), (2, 0))
+        df, amounts, total, fidelity, mids, fallbacks, missing = self.load(with_quotes=True)
+        self.assertEqual((mids, fallbacks, missing), (2, 0, 0))
         self.assertAlmostEqual(amounts["Options"], 200)
         self.assertAlmostEqual(total, 530)
         self.assertAlmostEqual(fidelity, 530)
