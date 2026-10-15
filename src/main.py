@@ -131,9 +131,11 @@ def summarize(df):
         "SPAXX": current[cash].sum(),
         "Pending Activity": current[pending].sum(),
     }
+    missing_values = options & option_value.isna()
+    df.loc[missing_values, "Price Source"] = "Unavailable"
     total = sum(amounts.values())
     fidelity_total = current.sum()
-    return df, amounts, total, fidelity_total, int((options & has_midpoint).sum()), int((options & ~has_midpoint).sum())
+    return df, amounts, total, fidelity_total, int((options & has_midpoint).sum()), int((options & ~has_midpoint & ~missing_values).sum()), int(missing_values.sum())
 
 
 def main():
@@ -145,7 +147,7 @@ def main():
         parser.error(f"File not found: {args.input_csv}")
 
     try:
-        df, amounts, total, fidelity_total, mids, fallbacks = summarize(read_fidelity_csv(args.input_csv))
+        df, amounts, total, fidelity_total, mids, fallbacks, missing_values = summarize(read_fidelity_csv(args.input_csv))
     except (ValueError, pd.errors.ParserError) as error:
         print(error)
         return 1
@@ -158,14 +160,21 @@ def main():
     print(f"Options (mixed quotes):  ${amounts['Options']:>15,.2f}")
     print(f"  Midpoint quotes:        {mids:>15}")
     print(f"  Fallback quotes:        {fallbacks:>15}")
+    print(f"  Missing valuations:     {missing_values:>15}")
     print(f"Other securities:        ${amounts['Other securities']:>15,.2f}")
     print(f"SPAXX:                   ${amounts['SPAXX']:>15,.2f}")
     print(f"Pending Activity:        ${amounts['Pending Activity']:>15,.2f}")
-    print(f"Total Portfolio Value:   ${total:>15,.2f}")
+    total_label = "Partial Valuation Total" if missing_values else "Total Portfolio Value"
+    print(f"{total_label + ':':<25}${total:>15,.2f}")
     print(f"Fidelity Market Value:   ${fidelity_total:>15,.2f}")
     print(f"Difference:              ${difference:>15,.2f} ({percentage:+.2f}%)")
     if fallbacks:
         print("Note: Options without bid/ask use Last price, or Fidelity value if Last is missing.")
+    if missing_values:
+        print(f"WARNING: {missing_values} options have no quote or Fidelity value. The totals above omit their unknown value.")
+        print("Missing option positions:")
+        for symbol in df.loc[df["Price Source"] == "Unavailable", get_column(df.columns, "symbol")]:
+            print(f"  {str(symbol).strip()}")
     print()
     return 0
 
