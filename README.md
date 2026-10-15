@@ -1,9 +1,41 @@
-# Portfolio Tracker v0.1
+# Portfolio Tracker
 
-1. Install Python 3.12+
-2. pip install pandas openpyxl
-3. Place your Fidelity export in data/Portfolio_Positions.xlsx
-4. Run: python src/main.py
+A Python command-line tool that summarizes a Fidelity positions CSV. Options use the
+bid/ask midpoint when both quotes are present. Fidelity's normal CSV export omits
+these columns, so options fall back to **Last price** (or Fidelity's current value
+if Last is missing). A last price is **not** a midpoint.
 
-Version 0.1 reads the Fidelity export, computes Mid=(Bid+Ask)/2 when Bid/Ask columns exist,
-and writes output/OpenPositions_Midpoint.xlsx.
+Cash (SPAXX), pending activity, and non-option securities use Fidelity's reported
+current value rather than the options contract multiplier. The summary compares
+the resulting portfolio valuation with Fidelity's reported total. Options with
+wide bid/ask spreads can differ substantially from their last-traded prices.
+
+## Setup
+
+Requires Python 3.12 or newer. From the repository root:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+## Run
+
+Download a **CSV** of positions from Fidelity, then run:
+
+```bash
+python src/main.py ~/Downloads/Portfolio_Positions.csv
+```
+
+The script prints a summary to the terminal; it does not create an Excel file.
+It reports how many option positions had midpoint quotes and how many required
+fallback prices. No account login or external quote retrieval is performed.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Keep real brokerage exports out of Git; the tests use invented account data.
