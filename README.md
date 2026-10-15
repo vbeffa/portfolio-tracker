@@ -39,3 +39,11 @@ python -m unittest discover -s tests -v
 ```
 
 Keep real brokerage exports out of Git; the tests use invented account data.
+
+## Missing quotes
+
+If an option has neither usable bid/ask, Last price, nor Current value,
+its calculated value remains missing. The report labels the sum as a **partial
+valuation total**, counts the missing positions, and prints their symbols.
+The Fidelity Market Value comparison is also incomplete for these rows.
+The program does not assume that an unquoted option is worthless.
